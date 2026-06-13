@@ -30,12 +30,6 @@ $ tvs x "Unpopular opinion: remote work made most people worse at their jobs. Fi
 
 </details>
 
-> ⚠️ **Simulation, not a crystal ball.** Treat the numbers as *relative*
-> indicators (will A out-spread B? where's the weak point?), not as guaranteed
-> view counts. Reach is "accounts reached in the simulated audience," not real
-> impressions — even X can't perfectly predict virality.
-
----
 
 ## Quick start
 
