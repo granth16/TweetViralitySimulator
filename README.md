@@ -40,6 +40,32 @@ tvs x "Nobody talks about this AI trick that saves me 10 hours a week. Here's ho
 
 No keys, no accounts. You get the report card above in your terminal.
 
+## Rewrite a tweet for more spread
+
+Don't just score it — *fix* it. `tvs improve` generates rewrite candidates,
+simulates **every one on the same synthetic audience**, and hands you the
+winner with the predicted lift. The simulator is the judge, not the generator.
+
+```text
+$ tvs improve "Read my new blog post about productivity. https://example.com #tips"
+
+╭─  ↑ +100 points   0 → 100 ──────────────────────────────────────────────────╮
+│   ORIGINAL                                                                   │
+│   "Read my new blog post about productivity. https://example.com #tips"      │
+│   score 0/100 · Likely to fizzle · reach 60/500                              │
+│                                                                              │
+│  ╭─ BEST REWRITE · 100/100 · Viral potential ─────────────────────────────╮ │
+│  │ Unpopular opinion: most productivity advice is procrastination in       │ │
+│  │ disguise.                                                                │ │
+│  ╰──────────────────────────────────────────────────────────────────────╯ │
+│   reach 500/500 · viral odds 98% · R 1.57                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+Works with **zero setup** (a heuristic rewriter applies known viral formats to
+*your* message). Point it at a model for real rewrites: `-p ollama` (local),
+`-p openai`, or `-p compat` (any OpenAI-compatible endpoint).
+
 ## A/B test two drafts
 
 The most useful mode — relative comparison is far more reliable than absolute
@@ -63,7 +89,9 @@ $ tvs compare "Read my new blog post about productivity https://example.com" \
 ## More options
 
 ```bash
-tvs x "your tweet"                  # heuristic scorer, zero setup
+tvs x "your tweet"                  # score a tweet, zero setup
+tvs improve "your tweet"            # rewrite for spread, ranked by the simulator
+tvs improve "your tweet" -n 10      # try more rewrite candidates
 tvs x "your tweet" -p ollama        # score the tweet with a local model
 tvs x "your tweet" -p openai        # score with OpenAI (needs OPENAI_API_KEY)
 tvs x "your tweet" -p compat        # score with any OpenAI-compatible endpoint
@@ -76,12 +104,17 @@ tvs x "your tweet" --save card.svg  # export the report card as an image
 ### Python API
 
 ```python
-from tweet_virality_simulator import analyze
+from tweet_virality_simulator import analyze, improve
 
 report = analyze("Unpopular opinion: remote work made people worse at their jobs.")
 print(report.virality_score, report.verdict)
 for w in report.weaknesses:
     print("-", w.label, w.detail)
+
+# Rewrite for spread — every candidate simulated on the same population.
+result = improve("Read my new blog post about productivity. https://example.com")
+print(f"+{result.lift()} points")
+print(result.best().tweet)
 ```
 
 ---

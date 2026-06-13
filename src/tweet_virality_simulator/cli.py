@@ -11,7 +11,8 @@ from rich.console import Console
 
 from .config import Config
 from .engine import analyze
-from .report import render_comparison, render_report
+from .improve import improve as improve_tweet
+from .report import render_comparison, render_improvement, render_report
 
 app = typer.Typer(
     add_completion=False,
@@ -88,6 +89,41 @@ def compare(
         report_a = analyze(tweet_a, cfg)
         report_b = analyze(tweet_b, cfg)
     render_comparison(report_a, report_b, console)
+
+
+@app.command()
+def improve(
+    tweet: str = typer.Argument(..., help="The tweet to rewrite for more spread."),
+    provider: str = typer.Option("heuristic", "--provider", "-p",
+                                 help="Rewriter/scorer: heuristic | openai | ollama | compat."),
+    variants: int = typer.Option(6, "--variants", "-n", help="How many rewrites to try."),
+    audience: int = typer.Option(1000, "--audience", "-a", help="Synthetic audience size."),
+    runs: int = typer.Option(120, "--runs", "-r", help="Monte Carlo runs."),
+    followers: int = typer.Option(60, "--followers", "-f",
+                                  help="Author's in-network follower seed."),
+    media: bool = typer.Option(False, "--media", help="Tweet includes image/video."),
+    seed: Optional[int] = typer.Option(None, "--seed", help="RNG seed (defaults to tweet hash)."),
+    profile: Optional[str] = typer.Option(None, "--profile",
+                                          help="Path to a calibration profile JSON."),
+    save: Optional[str] = typer.Option(None, "--save", help="Save the result card as an SVG image."),
+) -> None:
+    """Rewrite a tweet for spread — the simulator ranks the variants."""
+    cfg = Config(
+        provider=provider,
+        audience_size=audience,
+        runs=runs,
+        author_followers=followers,
+        seed=seed,
+        profile_path=profile,
+    )
+    with console.status("[bold]generating + simulating rewrites...", spinner="dots"):
+        result = improve_tweet(tweet, cfg, variants=variants, has_media=media)
+
+    out = Console(record=True) if save else console
+    render_improvement(result, out)
+    if save:
+        out.save_svg(save, title="tvs improve")
+        console.print(f"[dim]saved result card → {save}[/dim]")
 
 
 def main() -> None:

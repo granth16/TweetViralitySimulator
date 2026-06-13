@@ -100,3 +100,26 @@ class Report(BaseModel):
     weaknesses: List[Driver] = Field(default_factory=list)
 
     config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Improvement(BaseModel):
+    """Result of rewriting a tweet for spread: original + ranked candidates.
+
+    Every candidate is simulated on the *same* synthetic population as the
+    original, so score differences are a fair head-to-head lift, not noise.
+    """
+
+    original: Report
+    variants: List[Report] = Field(default_factory=list)  # ranked best-first
+    generated_by: str = "heuristic"
+
+    def best(self) -> Report:
+        """Highest-scoring tweet overall (may be the original if nothing beat it)."""
+        pool = [self.original, *self.variants]
+        return max(pool, key=lambda r: (r.virality_score, r.stats.reach_median))
+
+    def lift(self) -> int:
+        """Score points gained by the best rewrite over the original (>= 0)."""
+        if not self.variants:
+            return 0
+        return max(0, self.variants[0].virality_score - self.original.virality_score)

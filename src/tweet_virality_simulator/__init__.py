@@ -12,7 +12,8 @@ Quick start (Python):
 
 from .config import Config
 from .engine import analyze
-from .models import CascadeStats, Driver, Report, TweetDNA
+from .improve import improve
+from .models import CascadeStats, Driver, Improvement, Report, TweetDNA
 from .profile import DEFAULT_PROFILE, Profile, load_profile
 from .storage import Store, get_store
 from .tracing import Tracer, get_tracer, set_tracer
@@ -21,8 +22,10 @@ __version__ = "0.1.0"
 
 __all__ = [
     "analyze",
+    "improve",
     "Config",
     "Report",
+    "Improvement",
     "TweetDNA",
     "CascadeStats",
     "Driver",
