@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tweet-virality-simulator"
+version = "0.1.0"
+description = "Simulate whether a tweet spreads on X — before you post. A grounded, open-source virality simulator."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "TweetViralitySimulator contributors" }]
+keywords = ["twitter", "x", "virality", "simulation", "social-network", "contagion", "cascade"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.23",
+    "pydantic>=2.5",
+    "typer>=0.9",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# Optional LLM-backed tweet scoring. The tool runs fully without these (heuristic provider).
+llm = ["openai>=1.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+tvs = "tweet_virality_simulator.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/TweetViralitySimulator"
+Repository = "https://github.com/your-org/TweetViralitySimulator"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tweet_virality_simulator = ["py.typed"]
