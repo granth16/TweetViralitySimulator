@@ -12,9 +12,10 @@ venv/
 
 # Caches / artifacts
 .tvs_cache/
-*.gif
-*.svg
 .pytest_cache/
+# Generated report cards in the repo root (committed ones live in assets/)
+/card.svg
+/*.gif
 
 # OS / editor
 .DS_Store

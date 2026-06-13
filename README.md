@@ -8,28 +8,27 @@ and tells you how far it spreads — and *why*.
 
 Runs **fully locally, zero setup, no API key.**
 
+<p align="center">
+  <img src="assets/card.svg" alt="TweetViralitySimulator report card" width="760">
+</p>
+
+<details>
+<summary>plain-text version</summary>
+
 ```text
 $ tvs x "Unpopular opinion: remote work made most people worse at their jobs. Fight me."
 
 ╭─  100/100   Viral potential ───────────────────────────────────────────────╮
-│   "Unpopular opinion: remote work made most people worse at their jobs..."  │
-│                                                                             │
-│   Predicted spread                                                          │
-│   Reach (median)                                    947 / 1000 accounts     │
-│   Reach range (p10–p90)                                     954 – 1000      │
-│   Viral odds                                        98%  (≥300 reached)      │
-│   Reproduction number R                            2.13  (grows)            │
-│   In- vs out-of-network                  54% follow graph · 46% For You      │
-│   spread per round   ▄█▅▂▂▁▁                                                │
-│                                                                             │
-│   Why it works                                                              │
-│   ✓ Strong hook      The opening earns the first second.                    │
-│   ✓ Debate-bait      Sparks replies — the highest-weighted signal.          │
-│                                                                             │
-│   What's holding it back                                                    │
-│   (none detected)                                                           │
+│   Reach (median)            947 / 1000 accounts                             │
+│   Viral odds                98%  (≥300 reached)                             │
+│   Reproduction number R     2.13  (grows)                                   │
+│   In- vs out-of-network     54% follow graph · 46% For You                  │
+│   spread per round          ▄█▅▂▂▁▁                                         │
+│   ✓ Strong hook   ✓ Debate-bait                                             │
 ╰─────────────────────────────────────────────────────────────────────────────╯
 ```
+
+</details>
 
 > ⚠️ **Simulation, not a crystal ball.** Treat the numbers as *relative*
 > indicators (will A out-spread B? where's the weak point?), not as guaranteed
@@ -75,6 +74,7 @@ tvs x "your tweet" -p ollama       # score the tweet with a local model
 tvs x "your tweet" -p openai       # score with OpenAI (needs OPENAI_API_KEY)
 tvs x "your tweet" -a 2000 -r 200  # bigger audience, more runs
 tvs x "your tweet" --json          # machine-readable output
+tvs x "your tweet" --save card.svg # export the report card as an image
 ```
 
 ### Python API

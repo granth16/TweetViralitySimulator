@@ -38,6 +38,7 @@ def x(
     media: bool = typer.Option(False, "--media", help="Tweet includes image/video."),
     seed: Optional[int] = typer.Option(None, "--seed", help="RNG seed (defaults to tweet hash)."),
     as_json: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
+    save: Optional[str] = typer.Option(None, "--save", help="Save the report card as an SVG image."),
 ) -> None:
     """Simulate an X (Twitter) post."""
     cfg = Config(
@@ -52,8 +53,13 @@ def x(
 
     if as_json:
         console.print_json(_json.dumps(report.model_dump()))
-    else:
-        render_report(report, console)
+        return
+
+    out = Console(record=True) if save else console
+    render_report(report, out)
+    if save:
+        out.save_svg(save, title="tvs x")
+        console.print(f"[dim]saved report card → {save}[/dim]")
 
 
 @app.command()
