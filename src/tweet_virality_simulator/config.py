@@ -1,8 +1,9 @@
-"""Runtime configuration for a simulation.
+"""Runtime configuration: *how* to run a simulation.
 
-Defaults are tuned so that on the synthetic universe a weak tweet fizzles and a
-strong one can cascade — i.e. outcomes are *relative* indicators, not absolute
-view-count predictions. See README on positioning.
+The *what* — every calibratable number (reaction scales, network shape, algo
+thresholds, trait priors) — lives in :class:`~tweet_virality_simulator.profile.Profile`,
+loaded at runtime. That split is the open-core boundary: the engine and these
+execution knobs are open; the fitted Profile can stay private.
 """
 
 from __future__ import annotations
@@ -17,12 +18,16 @@ EMB_DIM = 24
 @dataclass
 class Config:
     # --- LLM provider for tweet DNA scoring (engine falls back to heuristic) ---
-    provider: str = "heuristic"  # "heuristic" | "openai" | "ollama"
+    provider: str = "heuristic"  # "heuristic" | "openai" | "ollama" | "compat"
 
-    # --- Population / network ---
+    # --- Calibration profile selection (the moat attaches here) ---
+    # Name of a built-in profile, or set ``profile_path`` / TVS_PROFILE_PATH to
+    # load a fitted profile artifact shipped by the private backend.
+    profile: str = "default"
+    profile_path: Optional[str] = None
+
+    # --- Population scale ---
     audience_size: int = 1000
-    communities: int = 12
-    avg_following: int = 18
 
     # --- Author / seeding (the creator prior) ---
     author_followers: int = 60  # in-network reach the author starts with
@@ -31,15 +36,6 @@ class Config:
     runs: int = 120
     max_rounds: int = 12
     seed: Optional[int] = None
-
-    # --- Algorithmic (For You) injection ---
-    # ~50/50 in-network vs out-of-network split is documented for X's For You feed.
-    promotion_threshold: float = 0.85  # engagement bar to unlock a bigger pool
-    pool_growth: float = 1.6           # geometric growth of each promoted pool
-    exploration: float = 0.15          # epsilon: occasional out-of-niche sampling
-
-    # --- Virality definition (relative to the simulated universe, not raw views) ---
-    viral_reach_fraction: float = 0.30
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

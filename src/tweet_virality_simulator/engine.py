@@ -13,7 +13,9 @@ from .models import Driver, Report, TweetDNA
 from .platforms.x import network as net
 from .platforms.x import tweet_dna
 from .population import audience as pop
+from .profile import Profile, load_profile
 from .providers import get_provider
+from .tracing import get_tracer
 
 
 def _seed_from(text: str, cfg: Config) -> int:
@@ -109,11 +111,20 @@ def analyze(
     text: str,
     config: Optional[Config] = None,
     has_media: bool = False,
+    profile: Optional[Profile] = None,
 ) -> Report:
-    """Run the full pipeline on a tweet and return a Report."""
+    """Run the full pipeline on a tweet and return a Report.
+
+    The fitted ``profile`` (calibration params) and the ``provider`` (e.g. a
+    trained model behind an OpenAI-compatible endpoint) are the two seams the
+    private backend attaches to — pass a Profile or set ``config.profile_path``
+    / ``config.provider`` and the engine code is unchanged.
+    """
     cfg = config or Config()
     if not text or not text.strip():
         raise ValueError("tweet text is empty")
+
+    profile = profile or load_profile(name=cfg.profile, path=cfg.profile_path)
 
     rng = np.random.default_rng(_seed_from(text, cfg))
 
@@ -123,12 +134,12 @@ def analyze(
     # numpy 2.0 on macOS/Accelerate emits spurious FP warnings from matmul on
     # perfectly finite data; silence them around the numeric core.
     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-        audience = pop.generate(cfg, rng)
-        network = net.build(audience, cfg, rng)
-        stats = simulate(dna, audience, network, cfg, rng)
+        audience = pop.generate(cfg, profile, rng)
+        network = net.build(audience, profile, rng)
+        stats = simulate(dna, audience, network, cfg, profile, rng)
 
     score = _score(stats, cfg)
-    return Report(
+    report = Report(
         tweet=text,
         virality_score=score,
         verdict=_verdict(score),
@@ -139,3 +150,22 @@ def analyze(
         weaknesses=_weaknesses(dna),
         config=cfg.to_dict(),
     )
+
+    # Flywheel seam: emit the prediction record. No-op unless a sink is wired
+    # (e.g. the private backend's outcome-ingestion store). Never blocks.
+    get_tracer().emit(
+        {
+            "tweet": text,
+            "provider": provider.name,
+            "profile": profile.name,
+            "dna": dna.model_dump(),
+            "config": cfg.to_dict(),
+            "prediction": {
+                "virality_score": report.virality_score,
+                "verdict": report.verdict,
+                "stats": stats.model_dump(),
+            },
+        }
+    )
+
+    return report

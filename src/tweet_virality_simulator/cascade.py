@@ -16,6 +16,7 @@ from .models import CascadeStats, TweetDNA
 from .platforms.x import algo, reactions
 from .platforms.x.network import Network, followers_of
 from .population.audience import Audience
+from .profile import Profile
 
 
 def _run_once(
@@ -23,6 +24,7 @@ def _run_once(
     audience: Audience,
     network: Network,
     cfg: Config,
+    profile: Profile,
     appeal: float,
     tweet_topic: np.ndarray,
     rng: np.random.Generator,
@@ -34,7 +36,7 @@ def _run_once(
     topical = (audience.topic @ tweet_topic + 1.0) / 2.0
     seed_weight = topical * (0.3 + audience.popularity)
     seed_weight = seed_weight / seed_weight.sum()
-    seed_k = int(min(max(cfg.author_followers, 5), int(0.15 * n)))
+    seed_k = int(min(max(cfg.author_followers, 5), int(profile.seed_fraction * n)))
     exposed = rng.choice(n, size=seed_k, replace=False, p=seed_weight)
     seen[exposed] = True
 
@@ -53,7 +55,7 @@ def _run_once(
             break
         reach_curve.append(m)
 
-        probs = reactions.action_probs(dna, audience, exposed, tweet_topic, appeal)
+        probs = reactions.action_probs(dna, audience, exposed, tweet_topic, appeal, profile)
         draws = rng.random((m, 4))
         like = draws[:, 0] < probs["like"]
         rt = draws[:, 1] < probs["retweet"]
@@ -70,7 +72,7 @@ def _run_once(
             depth = r + 1
 
         eng = reactions.engagement_rate(
-            int(like.sum()), int(rt.sum()), int(reply.sum()), int(quote.sum()), m
+            int(like.sum()), int(rt.sum()), int(reply.sum()), int(quote.sum()), m, profile
         )
 
         # Social (in-network) channel.
@@ -81,10 +83,10 @@ def _run_once(
 
         # Algorithmic (out-of-network) channel: gated by engagement.
         algo_new = np.empty(0, dtype=np.int64)
-        if eng >= cfg.promotion_threshold and n_sharers > 0:
-            pool *= cfg.pool_growth
+        if eng >= profile.promotion_threshold and n_sharers > 0:
+            pool *= profile.pool_growth
             algo_cand = algo.inject(
-                rng, audience, engaged_sum, int(pool), seen, cfg.exploration
+                rng, audience, engaged_sum, int(pool), seen, profile.exploration
             )
             if algo_cand.size:
                 algo_new = algo_cand[~seen[algo_cand]]
@@ -125,9 +127,10 @@ def simulate(
     audience: Audience,
     network: Network,
     cfg: Config,
+    profile: Profile,
     rng: np.random.Generator,
 ) -> CascadeStats:
-    appeal = reactions.content_appeal(dna)
+    appeal = reactions.content_appeal(dna, profile)
     tweet_topic = np.asarray(dna.topic_vector, dtype=np.float64)
 
     reaches: List[int] = []
@@ -141,7 +144,7 @@ def simulate(
     seed_size = 0
 
     for _ in range(cfg.runs):
-        out = _run_once(dna, audience, network, cfg, appeal, tweet_topic, rng)
+        out = _run_once(dna, audience, network, cfg, profile, appeal, tweet_topic, rng)
         seed_size = out["seed"]
         reaches.append(out["reach"])
         shares.append(out["shares"])
@@ -154,7 +157,7 @@ def simulate(
 
     reaches_arr = np.array(reaches)
     n = audience.n
-    viral_threshold = int(cfg.viral_reach_fraction * n)
+    viral_threshold = int(profile.viral_reach_fraction * n)
 
     max_len = max((len(c) for c in curves), default=0)
     avg_curve = []

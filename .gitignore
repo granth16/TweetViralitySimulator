@@ -12,6 +12,8 @@ venv/
 
 # Caches / artifacts
 .tvs_cache/
+.tvs_store/
+*.trace.jsonl
 .pytest_cache/
 # Generated report cards in the repo root (committed ones live in assets/)
 /card.svg

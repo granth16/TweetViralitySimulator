@@ -30,13 +30,15 @@ def _root() -> None:
 def x(
     tweet: str = typer.Argument(..., help="The tweet text to simulate."),
     provider: str = typer.Option("heuristic", "--provider", "-p",
-                                 help="Tweet scorer: heuristic | openai | ollama."),
+                                 help="Tweet scorer: heuristic | openai | ollama | compat."),
     audience: int = typer.Option(1000, "--audience", "-a", help="Synthetic audience size."),
     runs: int = typer.Option(120, "--runs", "-r", help="Monte Carlo runs."),
     followers: int = typer.Option(120, "--followers", "-f",
                                   help="Author's in-network follower seed."),
     media: bool = typer.Option(False, "--media", help="Tweet includes image/video."),
     seed: Optional[int] = typer.Option(None, "--seed", help="RNG seed (defaults to tweet hash)."),
+    profile: Optional[str] = typer.Option(None, "--profile",
+                                          help="Path to a calibration profile JSON (defaults to built-in)."),
     as_json: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
     save: Optional[str] = typer.Option(None, "--save", help="Save the report card as an SVG image."),
 ) -> None:
@@ -47,6 +49,7 @@ def x(
         runs=runs,
         author_followers=followers,
         seed=seed,
+        profile_path=profile,
     )
     with console.status("[bold]simulating cascade...", spinner="dots"):
         report = analyze(tweet, cfg, has_media=media)

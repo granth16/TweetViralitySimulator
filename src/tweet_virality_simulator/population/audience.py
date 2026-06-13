@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..config import EMB_DIM, Config
+from ..profile import Profile
 
 
 @dataclass
@@ -30,29 +31,33 @@ class Audience:
     community: np.ndarray        # (n,) community id
 
 
-def generate(cfg: Config, rng: np.random.Generator) -> Audience:
+def generate(cfg: Config, profile: Profile, rng: np.random.Generator) -> Audience:
     n = cfg.audience_size
-    c = max(1, cfg.communities)
+    c = max(1, profile.communities)
 
     # community centroids in the shared embedding space
     centroids = rng.standard_normal((c, EMB_DIM))
     centroids /= np.linalg.norm(centroids, axis=1, keepdims=True) + 1e-9
 
     community = rng.integers(0, c, size=n)
-    noise = 0.6 * rng.standard_normal((n, EMB_DIM))
+    noise = profile.community_noise * rng.standard_normal((n, EMB_DIM))
     topic = centroids[community] + noise
     topic /= np.linalg.norm(topic, axis=1, keepdims=True) + 1e-9
 
     # popularity: power-law -> a few hubs, long tail. Map to 0..1 by log-rank.
-    raw = rng.pareto(1.3, size=n) + 1.0
+    raw = rng.pareto(profile.popularity_pareto_a, size=n) + 1.0
     pop = np.log1p(raw)
     popularity = (pop - pop.min()) / (pop.max() - pop.min() + 1e-9)
 
     # engagement traits (most people engage rarely; a few are very active)
-    base_engage = np.clip(rng.lognormal(mean=-1.6, sigma=0.7, size=n), 0.0, 1.5)
-    share_propensity = rng.beta(1.5, 9.0, size=n)
-    like_rate = rng.beta(2.0, 5.0, size=n)
-    reply_rate = rng.beta(1.3, 12.0, size=n)
+    base_engage = np.clip(
+        rng.lognormal(mean=profile.base_engage_log_mean, sigma=profile.base_engage_log_sigma, size=n),
+        0.0,
+        1.5,
+    )
+    share_propensity = rng.beta(profile.share_beta[0], profile.share_beta[1], size=n)
+    like_rate = rng.beta(profile.like_beta[0], profile.like_beta[1], size=n)
+    reply_rate = rng.beta(profile.reply_beta[0], profile.reply_beta[1], size=n)
 
     return Audience(
         n=n,

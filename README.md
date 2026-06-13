@@ -69,12 +69,14 @@ $ tvs compare "Read my new blog post about productivity https://example.com" \
 ## More options
 
 ```bash
-tvs x "your tweet"                 # heuristic scorer, zero setup
-tvs x "your tweet" -p ollama       # score the tweet with a local model
-tvs x "your tweet" -p openai       # score with OpenAI (needs OPENAI_API_KEY)
-tvs x "your tweet" -a 2000 -r 200  # bigger audience, more runs
-tvs x "your tweet" --json          # machine-readable output
-tvs x "your tweet" --save card.svg # export the report card as an image
+tvs x "your tweet"                  # heuristic scorer, zero setup
+tvs x "your tweet" -p ollama        # score the tweet with a local model
+tvs x "your tweet" -p openai        # score with OpenAI (needs OPENAI_API_KEY)
+tvs x "your tweet" -p compat        # score with any OpenAI-compatible endpoint
+tvs x "your tweet" -a 2000 -r 200   # bigger audience, more runs
+tvs x "your tweet" --profile p.json # load a calibration profile artifact
+tvs x "your tweet" --json           # machine-readable output
+tvs x "your tweet" --save card.svg  # export the report card as an image
 ```
 
 ### Python API
@@ -121,15 +123,75 @@ Apache-2.0. Source of concepts: <https://github.com/twitter/the-algorithm>.
 
 ---
 
+## Extending it
+
+The engine is pluggable by design — every part you'd want to swap is behind a
+clean seam, so you can bring your own model, calibration, and infrastructure
+**without editing the engine**.
+
+| Seam | What it's for | How to attach |
+| --- | --- | --- |
+| **Provider** (`providers/`) | the tweet scorer | built-in `heuristic` / `openai` / `ollama`, or `compat` for any OpenAI-compatible endpoint (incl. your own fine-tuned model) |
+| **Profile** (`profile.py`) | every tunable number — reaction scales, network shape, algo thresholds, trait priors | ship a fitted `Profile` JSON and load it at runtime; the engine code never changes |
+| **Tracer** (`tracing/`) | emit one `(tweet, dna, params, prediction)` record per run | no-op by default; set `TVS_TRACE_PATH` for local JSONL, or register a custom sink |
+| **Store** (`storage/`) | persist reports / datasets / artifacts | `LocalStore` (JSON on disk) ships by default; implement `Store` for Postgres/S3/etc. |
+
+```python
+from tweet_virality_simulator import analyze, Config, Profile, load_profile
+
+# Calibration lives in data, not code — load a fitted profile artifact.
+report = analyze("your tweet", Config(profile_path="fitted_x.json"))
+
+# Or build/override one programmatically.
+profile = Profile(name="my_fit", promotion_threshold=0.7, appeal_scale=1.9)
+report = analyze("your tweet", profile=profile)
+```
+
+```python
+# Point the engine at any OpenAI-compatible model server.
+import os
+os.environ["TVS_COMPAT_BASE_URL"] = "https://your-endpoint/v1"
+os.environ["TVS_COMPAT_API_KEY"]  = "..."          # optional
+report = analyze("your tweet", Config(provider="compat"))
+```
+
+```python
+# Wire your own outcome sink (the data flywheel) without touching the engine.
+from tweet_virality_simulator import set_tracer, Tracer
+
+class MySink(Tracer):
+    def emit(self, record: dict) -> None:
+        ...  # ship to your warehouse / queue
+
+set_tracer(MySink())
+```
+
+Config resolution is explicit-arg → env var → built-in default, so nothing
+proprietary is required to run: the open package ships only the generic
+`default` profile and a local store, and works fully standalone.
+
+---
+
 ## Status & honest roadmap
 
 - **v0.1 (now):** a working, mechanistic simulator with sensible *priors*. It
   reproduces known effects (emotion/hooks lift spread, external links suppress
   it) but is **not yet calibrated** against real outcomes — so don't read the
-  numbers as accurate predictions, read them as relative signals.
-- **v0.2:** a calibration/validation harness that fits the audience + algorithm
-  parameters against real public cascade datasets and ships a reproducible
-  benchmark. That's what turns "plausible" into "grounded."
+  numbers as accurate predictions, read them as relative signals. All tunable
+  parameters now live in a loadable [`Profile`](#extending-it), and the model,
+  tracing, and storage seams are in place.
+- **v0.2 — calibration & benchmark:** a validation harness that fits the
+  `Profile` against real public cascade datasets, then reports accuracy on a
+  **held-out** set (ranking correlation + calibration error) so improvements are
+  measurable, not vibes. Ships a reproducible benchmark you can run yourself —
+  that's what turns "plausible" into "grounded."
+- **v0.3 — the learning loop:** the [`tracing`](#extending-it) hook closes into
+  an outcome-ingestion loop — predictions are compared against observed spread
+  and fed back to re-fit the `Profile` / train the reaction model, so accuracy
+  compounds over time instead of staying static.
+- **Managed option (later):** a hosted API + web UI for people who'd rather not
+  self-host or self-calibrate — same open engine underneath, loaded with a
+  fitted profile. The engine stays open and fully usable standalone forever.
 
 ## License
 

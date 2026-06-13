@@ -13,6 +13,9 @@ Quick start (Python):
 from .config import Config
 from .engine import analyze
 from .models import CascadeStats, Driver, Report, TweetDNA
+from .profile import DEFAULT_PROFILE, Profile, load_profile
+from .storage import Store, get_store
+from .tracing import Tracer, get_tracer, set_tracer
 
 __version__ = "0.1.0"
 
@@ -23,5 +26,14 @@ __all__ = [
     "TweetDNA",
     "CascadeStats",
     "Driver",
+    # backend seams
+    "Profile",
+    "DEFAULT_PROFILE",
+    "load_profile",
+    "Tracer",
+    "get_tracer",
+    "set_tracer",
+    "Store",
+    "get_store",
     "__version__",
 ]

@@ -13,12 +13,9 @@ from typing import List
 
 import numpy as np
 
-from ...config import Config
 from ..x import weights  # noqa: F401  (kept for discoverability of the X model)
 from ...population.audience import Audience
-
-_HOMOPHILY = 3.0   # gamma: weight on interest similarity
-_PREF_ATTACH = 1.4  # beta: weight on target popularity
+from ...profile import Profile
 
 
 @dataclass
@@ -27,12 +24,12 @@ class Network:
     in_degree: np.ndarray        # (n,)
 
 
-def build(audience: Audience, cfg: Config, rng: np.random.Generator) -> Network:
+def build(audience: Audience, profile: Profile, rng: np.random.Generator) -> Network:
     n = audience.n
     sim = audience.topic @ audience.topic.T  # (n, n) cosine (unit vectors)
 
-    base_pref = _PREF_ATTACH * np.log1p(audience.popularity * 9.0)  # (n,)
-    logit = _HOMOPHILY * sim + base_pref[None, :]
+    base_pref = profile.pref_attach * np.log1p(audience.popularity * 9.0)  # (n,)
+    logit = profile.homophily * sim + base_pref[None, :]
     np.fill_diagonal(logit, -1e9)
 
     # row-softmax -> per-node distribution over who it follows
@@ -43,7 +40,7 @@ def build(audience: Audience, cfg: Config, rng: np.random.Generator) -> Network:
     follower_lists: List[List[int]] = [[] for _ in range(n)]
     # out-degree varies (some people follow many accounts)
     out_deg = np.clip(
-        rng.poisson(cfg.avg_following, size=n), 1, max(1, n - 1)
+        rng.poisson(profile.avg_following, size=n), 1, max(1, n - 1)
     )
     for i in range(n):
         k = int(min(out_deg[i], n - 1))

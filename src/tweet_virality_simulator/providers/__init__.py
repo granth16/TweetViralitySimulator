@@ -17,6 +17,12 @@ def get_provider(name: str) -> LLMProvider:
         from .ollama_provider import OllamaProvider
 
         return OllamaProvider()
+    if name in ("compat", "openai_compatible", "custom"):
+        from .openai_compatible import OpenAICompatibleProvider
+
+        provider = OpenAICompatibleProvider()
+        # Fall back to heuristic if no endpoint is configured.
+        return provider if provider.available() else HeuristicProvider()
     return HeuristicProvider()
 
 
