@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json as _json
 from typing import Optional
 
@@ -10,7 +11,7 @@ from rich.console import Console
 
 from .config import Config
 from .engine import analyze
-from .report import render_report
+from .report import render_comparison, render_report
 
 app = typer.Typer(
     add_completion=False,
@@ -53,6 +54,31 @@ def x(
         console.print_json(_json.dumps(report.model_dump()))
     else:
         render_report(report, console)
+
+
+@app.command()
+def compare(
+    tweet_a: str = typer.Argument(..., help="Version A."),
+    tweet_b: str = typer.Argument(..., help="Version B."),
+    provider: str = typer.Option("heuristic", "--provider", "-p",
+                                 help="Tweet scorer: heuristic | openai | ollama."),
+    audience: int = typer.Option(1000, "--audience", "-a", help="Synthetic audience size."),
+    runs: int = typer.Option(120, "--runs", "-r", help="Monte Carlo runs."),
+    followers: int = typer.Option(60, "--followers", "-f",
+                                  help="Author's in-network follower seed."),
+    seed: Optional[int] = typer.Option(None, "--seed", help="RNG seed."),
+) -> None:
+    """A/B test two tweets on the same synthetic population."""
+    # Both versions must run on the SAME population for a fair comparison, so we
+    # force a shared seed (derived from both texts when not provided).
+    if seed is None:
+        seed = int(hashlib.md5((tweet_a + "||" + tweet_b).encode("utf-8")).hexdigest(), 16) % (2**32)
+    cfg = Config(provider=provider, audience_size=audience, runs=runs,
+                 author_followers=followers, seed=seed)
+    with console.status("[bold]simulating both versions...", spinner="dots"):
+        report_a = analyze(tweet_a, cfg)
+        report_b = analyze(tweet_b, cfg)
+    render_comparison(report_a, report_b, console)
 
 
 def main() -> None:

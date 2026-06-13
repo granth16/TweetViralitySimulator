@@ -108,3 +108,48 @@ def render_report(report: Report, console: Console = None) -> None:
 
     console.print(Panel(body, title=header, title_align="left",
                         border_style=color, padding=(1, 2)))
+
+
+def render_comparison(a: Report, b: Report, console: Console = None) -> None:
+    """Render a side-by-side A/B comparison of two tweets."""
+    console = console or Console()
+
+    def rank(r: Report):
+        return (r.virality_score, r.stats.reach_median)
+
+    a_wins = rank(a) >= rank(b)
+    winner, loser = ("A", "B") if a_wins else ("B", "A")
+    hi = max(a.stats.reach_median, b.stats.reach_median)
+    lo = max(min(a.stats.reach_median, b.stats.reach_median), 1)
+    ratio = hi / lo
+
+    col_a = "bold green" if a_wins else "dim"
+    col_b = "bold green" if not a_wins else "dim"
+
+    t = Table(show_header=True, box=None, expand=True, header_style="bold")
+    t.add_column("", justify="left")
+    t.add_column(Text("Version A", style=col_a), justify="right")
+    t.add_column(Text("Version B", style=col_b), justify="right")
+
+    t.add_row("Tweet", Text(a.tweet[:34] + ("…" if len(a.tweet) > 34 else ""), style=col_a),
+              Text(b.tweet[:34] + ("…" if len(b.tweet) > 34 else ""), style=col_b))
+    t.add_row("Virality score", Text(f"{a.virality_score}/100", style=col_a),
+              Text(f"{b.virality_score}/100", style=col_b))
+    t.add_row("Verdict", Text(a.verdict, style=col_a), Text(b.verdict, style=col_b))
+    t.add_row("Reach (median)", Text(str(a.stats.reach_median), style=col_a),
+              Text(str(b.stats.reach_median), style=col_b))
+    t.add_row("Viral odds", Text(f"{a.stats.p_viral*100:.0f}%", style=col_a),
+              Text(f"{b.stats.p_viral*100:.0f}%", style=col_b))
+    t.add_row("R", Text(f"{a.stats.reproduction_number:.2f}", style=col_a),
+              Text(f"{b.stats.reproduction_number:.2f}", style=col_b))
+
+    headline = Text()
+    headline.append(f"  Version {winner} ", style="bold green")
+    headline.append(f"is {ratio:.1f}× more likely to spread than Version {loser}",
+                    style="bold")
+
+    body = Group(t, Text(""), headline,
+                 Text(f"\n  same population · {a.stats.runs} simulations each · "
+                      f"scored by {a.dna.scored_by}", style="dim"))
+    console.print(Panel(body, title=Text("A/B comparison", style="bold"),
+                        title_align="left", border_style="cyan", padding=(1, 2)))
