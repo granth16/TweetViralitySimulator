@@ -46,15 +46,18 @@ class Profile(BaseModel):
     name: str = "default"
 
     # --- content appeal ---
+    # NOTE: these defaults are tuned to the open face-validity benchmark
+    # (validation/), i.e. generic priors. A profile fitted on real outcome data
+    # ships separately and stays private.
     appeal_weights: Dict[str, float] = Field(default_factory=_appeal_weights_defaults)
-    appeal_scale: float = 1.7
+    appeal_scale: float = 1.84
     link_penalty: float = 0.30
     media_boost: float = 0.08
 
     # --- reaction propensity scales ---
-    like_scale: float = 6.0
-    retweet_scale: float = 7.0
-    reply_scale: float = 6.0
+    like_scale: float = 6.56
+    retweet_scale: float = 8.16
+    reply_scale: float = 7.03
     reply_controversy: float = 1.3
     quote_controversy: float = 0.9
     p_like_cap: float = 0.9
@@ -68,8 +71,8 @@ class Profile(BaseModel):
     # --- network structure ---
     communities: int = 12
     avg_following: int = 18
-    homophily: float = 3.0
-    pref_attach: float = 1.4
+    homophily: float = 3.84
+    pref_attach: float = 1.60
     community_noise: float = 0.6
 
     # --- audience trait priors ---
@@ -81,9 +84,9 @@ class Profile(BaseModel):
     reply_beta: List[float] = Field(default_factory=lambda: [1.3, 12.0])
 
     # --- algorithmic (For You) injection ---
-    promotion_threshold: float = 0.85
-    pool_growth: float = 1.6
-    exploration: float = 0.15
+    promotion_threshold: float = 0.62
+    pool_growth: float = 1.75
+    exploration: float = 0.25
     seed_fraction: float = 0.15  # cap on seed as fraction of audience
 
     # --- virality definition (relative to the simulated universe) ---

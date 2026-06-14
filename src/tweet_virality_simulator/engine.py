@@ -26,13 +26,25 @@ def _seed_from(text: str, cfg: Config) -> int:
 
 
 def _score(stats, cfg: Config) -> int:
-    # Amplification: how far past the author's own seed audience it traveled.
+    # Graded, log-scaled so strong tweets spread out instead of all pinning at
+    # 100. Four signals: amplification past the seed, share of the universe
+    # reached, organic branching (R), and the odds of a viral run.
     seed = max(stats.seed_size, 1)
     amplification = stats.reach_median / seed
-    amp_component = min(max(amplification - 1.0, 0.0) / 4.0, 1.0)  # 5x seed -> full
-    r_component = min(stats.reproduction_number / 1.2, 1.0)  # R>=1.2 -> full
-    score = 0.5 * amp_component + 0.3 * r_component + 0.2 * stats.p_viral
-    return int(round(100 * float(np.clip(score, 0.0, 1.0))))
+    # log2 amplification; full credit only near ~32x the seed audience.
+    amp_component = float(np.clip(np.log2(max(amplification, 1.0)) / 5.0, 0.0, 1.0))
+    frac_component = float(np.clip(stats.reach_fraction_median, 0.0, 1.0))
+    # R in [0.8, 2.0] -> [0, 1]; below ~1 it's dying, so it shouldn't score high.
+    r_component = float(np.clip((stats.reproduction_number - 0.8) / 1.2, 0.0, 1.0))
+    p_component = float(np.clip(stats.p_viral, 0.0, 1.0))
+
+    raw = (
+        0.30 * amp_component
+        + 0.25 * frac_component
+        + 0.25 * r_component
+        + 0.20 * p_component
+    )
+    return int(round(100 * float(np.clip(raw, 0.0, 1.0))))
 
 
 def _verdict(score: int) -> str:

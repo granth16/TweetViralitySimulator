@@ -18,12 +18,12 @@ Runs **fully locally, zero setup, no API key.**
 ```text
 $ tvs x "Unpopular opinion: remote work made most people worse at their jobs. Fight me."
 
-╭─  100/100   Viral potential ───────────────────────────────────────────────╮
-│   Reach (median)            947 / 1000 accounts                             │
-│   Viral odds                98%  (≥300 reached)                             │
-│   Reproduction number R     2.13  (grows)                                   │
-│   In- vs out-of-network     54% follow graph · 46% For You                  │
-│   spread per round          ▄█▅▂▂▁▁                                         │
+╭─  88/100   Viral potential ────────────────────────────────────────────────╮
+│   Reach (median)            1000 / 1000 accounts                            │
+│   Viral odds                100%  (≥300 reached)                            │
+│   Reproduction number R     3.89  (grows)                                   │
+│   In- vs out-of-network     52% follow graph · 48% For You                  │
+│   spread per round          ▃█▄▂▁                                           │
 │   ✓ Strong hook   ✓ Debate-bait                                             │
 ╰─────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -49,16 +49,15 @@ winner with the predicted lift. The simulator is the judge, not the generator.
 ```text
 $ tvs improve "Read my new blog post about productivity. https://example.com #tips"
 
-╭─  ↑ +100 points   0 → 100 ──────────────────────────────────────────────────╮
+╭─  ↑ +84 points   4 → 88 ────────────────────────────────────────────────────╮
 │   ORIGINAL                                                                   │
 │   "Read my new blog post about productivity. https://example.com #tips"      │
-│   score 0/100 · Likely to fizzle · reach 60/500                              │
+│   score 4/100 · Likely to fizzle · reach 60/500                              │
 │                                                                              │
-│  ╭─ BEST REWRITE · 100/100 · Viral potential ─────────────────────────────╮ │
-│  │ Unpopular opinion: most productivity advice is procrastination in       │ │
-│  │ disguise.                                                                │ │
+│  ╭─ BEST REWRITE · 88/100 · Viral potential ──────────────────────────────╮ │
+│  │ Unpopular opinion: read my new blog post about productivity.            │ │
 │  ╰──────────────────────────────────────────────────────────────────────╯ │
-│   reach 500/500 · viral odds 98% · R 1.57                                    │
+│   reach 500/500 · viral odds 100% · R 3.77                                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -77,12 +76,12 @@ $ tvs compare "Read my new blog post about productivity https://example.com" \
 
 ╭─ A/B comparison ────────────────────────────────────────────────╮
 │                              Version A            Version B       │
-│   Virality score                 0/100              100/100       │
+│   Virality score                 2/100               94/100       │
 │   Verdict             Likely to fizzle      Viral potential       │
-│   Reach (median)                    60                  947       │
-│   R                               0.00                 1.41       │
+│   Reach (median)                    60                 1000       │
+│   R                               0.00                 2.06       │
 │                                                                  │
-│   Version B is 15.8× more likely to spread than Version A        │
+│   Version B is 16.7× more likely to spread than Version A        │
 ╰──────────────────────────────────────────────────────────────────╯
 ```
 
@@ -99,6 +98,8 @@ tvs x "your tweet" -a 2000 -r 200   # bigger audience, more runs
 tvs x "your tweet" --profile p.json # load a calibration profile artifact
 tvs x "your tweet" --json           # machine-readable output
 tvs x "your tweet" --save card.svg  # export the report card as an image
+tvs validate                        # score the model on the face-validity benchmark
+tvs validate --tune                 # search for better simulation parameters
 ```
 
 ### Python API
@@ -207,11 +208,13 @@ proprietary is required to run: the open package ships only the generic
   numbers as accurate predictions, read them as relative signals. All tunable
   parameters now live in a loadable [`Profile`](#extending-it), and the model,
   tracing, and storage seams are in place.
-- **v0.2 — calibration & benchmark:** a validation harness that fits the
-  `Profile` against real public cascade datasets, then reports accuracy on a
-  **held-out** set (ranking correlation + calibration error) so improvements are
-  measurable, not vibes. Ships a reproducible benchmark you can run yourself —
-  that's what turns "plausible" into "grounded."
+- **v0.2 — calibration & benchmark:** a validation harness ships *now* — run
+  `tvs validate` to score the model against a labeled face-validity benchmark
+  (rank correlation, tier separation, saturation, directional invariants), and
+  `tvs validate --tune` to search the `Profile` for better params. Today it runs
+  on *priors* (a sanity check, not real-outcome accuracy); the same harness runs
+  on **real cascade data** loaded via the storage seam, which is what turns
+  "plausible" into "grounded."
 - **v0.3 — the learning loop:** the [`tracing`](#extending-it) hook closes into
   an outcome-ingestion loop — predictions are compared against observed spread
   and fed back to re-fit the `Profile` / train the reaction model, so accuracy

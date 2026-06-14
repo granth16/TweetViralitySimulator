@@ -126,6 +126,33 @@ def improve(
         console.print(f"[dim]saved result card → {save}[/dim]")
 
 
+@app.command()
+def validate(
+    profile: Optional[str] = typer.Option(None, "--profile",
+                                          help="Path to a calibration profile JSON (defaults to built-in)."),
+    audience: int = typer.Option(600, "--audience", "-a", help="Synthetic audience size."),
+    runs: int = typer.Option(60, "--runs", "-r", help="Monte Carlo runs per tweet."),
+    do_tune: bool = typer.Option(False, "--tune", help="Search for better profile params."),
+    samples: int = typer.Option(60, "--samples", help="Tuning samples (with --tune)."),
+) -> None:
+    """Score the model against the face-validity benchmark (honest sanity check)."""
+    from .validation import evaluate, tune as tune_profile
+
+    cfg = Config(audience_size=audience, runs=runs, profile_path=profile)
+    if do_tune:
+        with console.status("[bold]searching profile space...", spinner="dots"):
+            res = tune_profile(n_samples=samples, config=cfg)
+        console.print(res.summary())
+        console.print("\n[dim]save the tuned profile and load it with --profile / TVS_PROFILE_PATH[/dim]")
+        return
+
+    with console.status("[bold]running benchmark...", spinner="dots"):
+        result = evaluate(config=cfg)
+    console.print(f"[bold]benchmark[/bold]  {result.summary()}")
+    console.print("[dim]priors-based sanity check, not real-outcome accuracy — "
+                  "real data plugs in via the storage seam.[/dim]")
+
+
 def main() -> None:
     app()
 
