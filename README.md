@@ -149,6 +149,29 @@ asymmetric engagement weights (a reply the author engages back with is worth far
 more than a like). No code is copied; that repo is AGPL-3.0 and this project is
 Apache-2.0. Source of concepts: <https://github.com/twitter/the-algorithm>.
 
+### How it keeps getting better
+
+The simulated audience isn't static. The engine is built around a learning loop:
+every prediction is emitted through the [tracing](#extending-it) hook, and the
+**managed backend continuously trains the simulated audience and re-fits the
+calibration `Profile` against real-world outcomes** — so its predictions sharpen
+over time instead of staying frozen at launch.
+
+```
+your tweet ─► simulator ─► prediction ──┐
+                                        ▼
+                         real outcomes (reach, replies, RTs)
+                                        ▼
+            continuously re-train the audience + re-fit the Profile
+                                        ▼
+                 improved calibration ──► better predictions
+```
+
+The open engine ships with a generic, standalone profile and works fully offline
+forever. Connecting the managed backend (a flip of `--provider` / a loaded
+profile, [no engine changes](#extending-it)) swaps in the continuously-trained
+model — the accuracy compounds as more outcomes flow in.
+
 ---
 
 ## Extending it
