@@ -6,7 +6,8 @@ Paste a tweet. It builds a synthetic X audience, models how the For-You
 algorithm and the follower graph would carry it, runs thousands of simulations,
 and tells you how far it spreads — and *why*.
 
-Runs **fully locally, zero setup, no API key.**
+Runs **fully locally, zero setup, no API key.** Score a draft, rewrite it for
+spread (`tvs improve`), A/B two versions, or benchmark the model (`tvs validate`).
 
 <p align="center">
   <img src="assets/card.svg" alt="TweetViralitySimulator report card" width="760">
@@ -118,6 +119,24 @@ print(f"+{result.lift()} points")
 print(result.best().tweet)
 ```
 
+### Validate the model
+
+The open engine ships a **face-validity benchmark** — 24 hand-labeled tweets plus
+directional invariants (links hurt, hooks help, etc.). Run it anytime to check
+that the simulator still ranks tweets sensibly:
+
+```bash
+tvs validate
+# rank_corr=+0.65  pair_acc=0.78  invariants=1.00  saturation=0.08
+# tier means [T0:17 T1:18 T2:36 T3:88]  (dead → viral-shaped)
+
+tvs validate --tune    # random-search Profile params to improve the benchmark
+```
+
+This is a **sanity check on priors**, not proof of real-world accuracy. The same
+evaluation logic runs on **real outcome data** in the managed backend (see
+below), which is what turns "plausible" into "grounded."
+
 ---
 
 ## How it works
@@ -151,28 +170,67 @@ Apache-2.0. Source of concepts: <https://github.com/twitter/the-algorithm>.
 
 ### How it keeps getting better
 
-The simulated audience isn't static. The engine is built around a learning loop:
-every prediction is emitted through the [tracing](#extending-it) hook, and the
-**managed backend continuously trains the simulated audience and re-fits the
-calibration `Profile` against real-world outcomes** — so its predictions sharpen
-over time instead of staying frozen at launch.
+The simulated audience isn't static. The open engine is built around a
+**continual-learning loop** — the code for the loop lives in the engine's
+[seams](#extending-it); a separate **managed backend** (not in this repo)
+implements the loop in production.
 
 ```
-your tweet ─► simulator ─► prediction ──┐
-                                        ▼
-                         real outcomes (reach, replies, RTs)
-                                        ▼
-            continuously re-train the audience + re-fit the Profile
-                                        ▼
-                 improved calibration ──► better predictions
+your tweet ──► simulator ──► prediction + features     [tracing hook → Postgres]
+                                    │
+              ┌─────────────────────┴─────────────────────┐
+              │                                           │
+    paste tweet link                          connect X (OAuth)
+    (public metrics)                          (impressions + history)
+              │                                           │
+              └─────────────────────┬─────────────────────┘
+                                    ▼
+              label: rel_amplification vs author baseline
+              (how many × better than *your* normal tweet — not raw reach)
+                                    ▼
+              temporal train/test → refit Profile → champion-challenger
+                                    ▼
+              promoted profile served on next request (no engine code change)
 ```
 
-The open engine ships with a generic, standalone profile and works fully offline
-forever. Connecting the managed backend (a flip of `--provider` / a loaded
-profile, [no engine changes](#extending-it)) swaps in the continuously-trained
-model — the accuracy compounds as more outcomes flow in.
+**Why relative amplification, not raw reach:** a 1M-follower account will almost
+always beat a 1k account on impressions. The label measures whether *this*
+content punched above the author's own baseline — the same thing the simulator
+models (spread beyond the seed audience).
+
+**Two outcome paths (both feed the same label):**
+
+| Path | How | Signal |
+| --- | --- | --- |
+| **Author-authorized** | Connect X via OAuth | Impressions + engagement (best) |
+| **Paste-a-link** | Submit a posted tweet URL | Public likes / RTs / replies (bootstrap) |
+
+The open engine ships a tuned `default` profile and works **fully offline
+forever**. The managed backend loads a **fitted profile** (and optionally a
+trained model behind `compat`) via env/config — [no engine changes](#extending-it).
+Accuracy compounds as more `(prediction, outcome)` pairs accumulate.
 
 ---
+
+## Open-core architecture
+
+This repo is the **engine** (Apache-2.0). Calibration data, fitted profiles, and
+the hosted API live in a **private backend** that depends on this package and
+attaches through four seams — the engine never imports anything closed.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TweetViralitySimulator (this repo)                         │
+│  analyze · improve · compare · validate                     │
+│  Profile · tracing · storage · providers                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ seams (no fork)
+┌──────────────────────────▼──────────────────────────────────┐
+│  Managed backend (private)                                  │
+│  FastAPI · Supabase · outcome ingestion · cron retrain        │
+│  champion-challenger promotion · fitted Profile + model       │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Extending it
 
@@ -184,8 +242,8 @@ clean seam, so you can bring your own model, calibration, and infrastructure
 | --- | --- | --- |
 | **Provider** (`providers/`) | the tweet scorer | built-in `heuristic` / `openai` / `ollama`, or `compat` for any OpenAI-compatible endpoint (incl. your own fine-tuned model) |
 | **Profile** (`profile.py`) | every tunable number — reaction scales, network shape, algo thresholds, trait priors | ship a fitted `Profile` JSON and load it at runtime; the engine code never changes |
-| **Tracer** (`tracing/`) | emit one `(tweet, dna, params, prediction)` record per run | no-op by default; set `TVS_TRACE_PATH` for local JSONL, or register a custom sink |
-| **Store** (`storage/`) | persist reports / datasets / artifacts | `LocalStore` (JSON on disk) ships by default; implement `Store` for Postgres/S3/etc. |
+| **Tracer** (`tracing/`) | emit one `(tweet, dna, params, prediction)` record per run | no-op by default; set `TVS_TRACE_PATH` for local JSONL, or register a sink (managed backend → Postgres) |
+| **Store** (`storage/`) | persist reports / datasets / artifacts | `LocalStore` (JSON on disk) ships by default; the managed backend implements `Store` on Supabase/Postgres |
 
 ```python
 from tweet_virality_simulator import analyze, Config, Profile, load_profile
@@ -225,26 +283,28 @@ proprietary is required to run: the open package ships only the generic
 
 ## Status & honest roadmap
 
-- **v0.1 (now):** a working, mechanistic simulator with sensible *priors*. It
-  reproduces known effects (emotion/hooks lift spread, external links suppress
-  it) but is **not yet calibrated** against real outcomes — so don't read the
-  numbers as accurate predictions, read them as relative signals. All tunable
-  parameters now live in a loadable [`Profile`](#extending-it), and the model,
-  tracing, and storage seams are in place.
-- **v0.2 — calibration & benchmark:** a validation harness ships *now* — run
-  `tvs validate` to score the model against a labeled face-validity benchmark
-  (rank correlation, tier separation, saturation, directional invariants), and
-  `tvs validate --tune` to search the `Profile` for better params. Today it runs
-  on *priors* (a sanity check, not real-outcome accuracy); the same harness runs
-  on **real cascade data** loaded via the storage seam, which is what turns
-  "plausible" into "grounded."
-- **v0.3 — the learning loop:** the [`tracing`](#extending-it) hook closes into
-  an outcome-ingestion loop — predictions are compared against observed spread
-  and fed back to re-fit the `Profile` / train the reaction model, so accuracy
-  compounds over time instead of staying static.
-- **Managed option (later):** a hosted API + web UI for people who'd rather not
-  self-host or self-calibrate — same open engine underneath, loaded with a
-  fitted profile. The engine stays open and fully usable standalone forever.
+- **v0.1 (shipped):** mechanistic simulator with tuned priors — `tvs x`,
+  `tvs compare`, `tvs improve`, report cards, SVG export. Reproduces known effects
+  (hooks/emotion lift spread, links suppress it). All tunable numbers live in a
+  loadable [`Profile`](#extending-it); provider, tracing, and storage seams are
+  in place. Default profile tuned via the face-validity benchmark (~0.65 rank
+  correlation, zero saturation on strong tweets).
+- **v0.2 (shipped):** validation harness — `tvs validate` reports rank
+  correlation, tier separation, saturation, and directional invariants;
+  `tvs validate --tune` searches the `Profile` for better params. Priors-based
+  sanity today; same metrics on real outcomes in the managed backend.
+- **v0.3 (in progress):** continual-learning backend — prediction logging
+  ([`tracing`](#extending-it)), dual outcome ingestion (OAuth + paste-a-link),
+  `rel_amplification` labels, temporal eval, champion-challenger profile
+  promotion. Engine unchanged; backend attaches via seams.
+- **Next:** accumulate real outcome data → publish a benchmark showing fitted
+  profile beats default → optional trained reaction model behind `compat` →
+  hosted API for users who don't want to self-host.
+
+> **Read the numbers as relative signals**, not guaranteed view counts. Even X
+> can't perfectly predict virality. The open tool is useful for comparing drafts
+> and finding weak points; the managed backend is what makes predictions
+> *grounded* over time.
 
 ## License
 
