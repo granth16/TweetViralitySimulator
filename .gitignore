@@ -23,3 +23,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Private backend (closed-source; lives in its own repo, never in the open one)
+/tvs-cloud/

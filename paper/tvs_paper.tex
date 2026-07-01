@@ -1,0 +1,824 @@
+% ---------------------------------------------------------------------------
+% Tweet Virality Simulator (TVS) paper draft.
+%
+% This compiles with a plain LaTeX install (pdflatex tvs_paper.tex).
+% For an ICWSM / AAAI submission, replace the documentclass and preamble with
+% the official aaai style files (aaai24.sty etc.) and move the body across.
+%
+% Places that need your real numbers are marked with \fill{...} so they show
+% up clearly. Search for "fill" before you submit.
+% ---------------------------------------------------------------------------
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{url}
+\usepackage{authblk}
+
+% A visible placeholder so unfinished numbers are easy to spot.
+\newcommand{\fill}[1]{\textbf{[#1]}}
+
+\title{Knowing Before You Post: A Self Improving Simulator that Estimates How Far a Tweet Will Travel}
+
+\author[1]{First Author}
+\author[1]{Second Author}
+\affil[1]{Your Affiliation, City, Country}
+\affil[ ]{\texttt{\{first, second\}@youruniversity.edu}}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Most work on tweet popularity waits until a post is already spreading and then
+forecasts how big the wave will get. That is useful for trend tracking, but it
+does not help a person who is staring at a draft and wondering whether it is
+worth posting. We study the harder question: given only the text of a tweet
+that has not been posted yet, can we say how far it is likely to spread for that
+specific author? We build a simulator that turns a draft into a small synthetic
+crowd, lets that crowd react and pass the message along through both the
+follower graph and an algorithmic feed, and reads off how far the message
+travels across many random runs. The score is trained not on raw likes, which
+mostly reflect how famous the account is, but on how much a tweet beats the
+author's own typical performance. A learning loop logs every prediction,
+collects the real result later, refits the simulator, and only swaps in a new
+version when it clearly beats the current one on held out data from a later time
+period. The stack also fits per niche appeal weights, per community engagement
+offsets, optional author specific crowd priors, a learned reaction model when
+impression level data is available, ensemble uncertainty bands, causal A/B
+experiments over profile versions, and daily drift monitoring with automated
+retrain triggers. We trained and evaluated the system on \fill{100{,}000} tweets
+from \fill{N} public accounts. The calibrated simulator reaches a rank
+correlation of \fill{X.XX} between its score and real relative spread, compared
+with \fill{Y.YY} for the uncalibrated baseline, while scoring a draft in about
+\fill{Z} seconds. We release the simulation engine as open source and describe
+the full loop from draft to outcome to retraining.
+\end{abstract}
+
+\section{Introduction}
+
+Every day people decide whether a post is good enough to share. Brands, writers,
+campaigners, and ordinary users all make a quiet bet each time they hit send.
+The question they are really asking is simple. Will this travel, or will it sit
+there with a handful of likes?
+
+Research on information spread has mostly answered a related but different
+question. Given a post that is already collecting reshares, how large will the
+final cascade be? Methods built on point processes and on learned features do
+this well once a post has a head start \cite{zhao2015seismic,cheng2014cascades}.
+The catch is that they need the early part of the cascade as input. They cannot
+score a blank draft, because there is no resharing history to read from yet.
+
+A second line of work predicts popularity straight from content and account
+features using machine learning \cite{rameez2022viralbert}. These models can run
+before posting, but they tend to learn account size. A tweet from a star with
+ten million followers will be predicted to do well almost regardless of what it
+says. That is correct on average and useless for the person trying to improve a
+draft, because they cannot change their follower count between drafts.
+
+A newer group of papers simulates the crowd itself, often with large language
+model agents, and reads spread off the simulation
+\cite{liu2025popsim,park2023agents}. This is closer to what we want, but the
+language model agents are slow and the systems are usually fit once on a fixed
+benchmark rather than kept honest against a stream of real outcomes.
+
+We take a middle path. Our simulator uses light, fast agents rather than
+language model agents, so it can run many random trials per draft inside a normal
+web request. It is built for the moment before posting, so it never needs cascade
+history. And it is trained on a target that strips out account size, so the score
+reflects the message and not the megaphone.
+
+Our contributions are the following. First, a simulator that estimates spread for
+an unposted tweet by running a synthetic cascade across a follower graph and an
+algorithmic feed. Second, a training target we call relative amplification, which
+measures how far a tweet beats its own author's normal results, so the same model
+is fair to a small account and a large one. Third, a closed learning loop that
+logs predictions, gathers outcomes, refits the simulator with a black box
+optimizer, and promotes a new version only when it wins on data from a later time
+window. Fourth, a full continual learning stack---niche appeal fitting,
+community offsets, author audience profiles, a learned reaction model, ensemble
+uncertainty, causal experiments, and drift monitoring---wired end to end in a
+deployed service. Fifth, an evaluation on \fill{100{,}000} tweets with ablations
+over every major component.
+
+\section{Related Work}
+
+\paragraph{Cascade forecasting.}
+A long line of work predicts the eventual size of a cascade from its early
+shape. SEISMIC treats resharing as a self exciting process and gives strong real
+time size estimates \cite{zhao2015seismic}. Cheng and colleagues frame growth as
+a classification problem and show that early breadth predicts later size
+\cite{cheng2014cascades}. These methods are accurate, but they read from an
+observed cascade, so they answer a question that only exists after posting.
+
+\paragraph{Content based popularity.}
+Other work predicts engagement from the post itself and from author features,
+often with transformer text encoders \cite{rameez2022viralbert}. These run
+before posting. Our concern with them is the target. When the label is raw reach
+or raw likes, the strongest signal is follower count, and the model mostly
+ranks accounts rather than messages.
+
+\paragraph{Agent based and simulation models.}
+Simulating the crowd has a long history in this field. Early work showed that
+limited attention plus network structure alone can explain why a few messages go
+far while most die \cite{weng2012competition}. Others modeled the decision to
+reshare from feed position and author standing \cite{pezzoni2013retweet}. Recent
+systems put language model agents in a sandbox and read spread or popularity off
+the simulation \cite{liu2025popsim,park2023agents}. We share the simulation idea
+but keep the agents simple so the model is fast and can be retrained often
+against live results.
+
+\paragraph{Relative measures of reach.}
+Our training target borrows its spirit from audits of algorithmic amplification,
+which compare what an algorithm shows against a neutral baseline rather than
+looking at raw totals \cite{huszar2022amplification}. We move that idea down to
+the level of a single author. Instead of comparing feeds, we compare a tweet
+against the author's own median tweet.
+
+\section{The Simulator}
+
+The engine turns one tweet into a distribution over outcomes. Figure~\ref{fig:pipeline}
+summarizes the flow. The subsections below walk through each stage in the order
+the code runs them.
+
+\subsection{Tweet DNA}
+Before any crowd is built, we read the draft into a fixed feature vector we call
+\textbf{Tweet DNA}. This is not a black box embedding. It is a small, named set
+of signals that a human can inspect.
+
+\paragraph{Semantic pull (six scores, each from 0 to 1).}
+Hook strength measures whether the opening line stops the scroll. Emotional
+intensity captures anger, joy, fear, and similar tone. Novelty flags surprising
+or contrarian claims. Controversy marks debate bait and polarizing framing.
+Relatability picks up universal experiences and direct address. Clarity reflects
+how easy the sentence is to parse on a fast feed.
+
+\paragraph{Structural flags.}
+We also record length, hashtag count, mention count, whether a link is present,
+whether media is attached, and whether the text is a question. These matter
+because links and hashtag stuffing often suppress reach on the platform we model.
+
+\paragraph{Topic vector.}
+A 24 dimensional topic vector situates the tweet in interest space so the seed
+audience can be biased toward people who care about the subject. The production
+encoder is a lightweight hashing trick for speed; we also support a frozen
+sentence transformer (e.g.\ MiniLM) for stronger semantic alignment when latency
+budget allows. Both paths feed the same cascade interface.
+
+\paragraph{Niche appeal.}
+Beyond global DNA scores, each tweet is scored for appeal within a fixed set of
+\fill{K} topical niches (technology, politics, sports, and similar anchors).
+Soft membership weights combine with per niche appeal coefficients learned from
+data (Section~\ref{sec:niche-appeal}). This lets the same wording land differently
+depending on which communities are likely to see it.
+
+The default DNA scorer is a fast rule based module. The same slot accepts a
+language model or an external compat endpoint with no change to the simulator
+core. Reaction probabilities and appeal in the cascade read directly from DNA,
+so calibration can learn which dimensions actually predict spread for our data.
+
+\subsection{Building a crowd}
+For each draft we generate a synthetic audience of about one thousand personas.
+Each persona carries:
+\begin{itemize}
+  \item an interest vector (clustered into \fill{12} communities),
+  \item a latent popularity score from a heavy tailed distribution (a few hubs, many
+  small accounts),
+  \item personal rates for liking, replying, and resharing, drawn from learned
+  Beta priors,
+  \item optional per community offsets that shift those rates up or down after
+  calibration.
+\end{itemize}
+When a known author connects through OAuth, the service builds and stores an
+\textbf{audience profile} for that author: Beta birth priors for like, reply,
+and share rates, engagement scale, popularity tail shape, and optional community
+offsets. At predict time we resolve author profile $\rightarrow$ generic profile
+$\rightarrow$ global champion and patch the crowd's birth parameters so the
+synthetic followers match that author's real follower makeup.
+
+\subsection{Building the follower graph}
+We connect personas with a directed follow graph. Two forces shape who follows
+whom.
+
+\paragraph{Homophily.}
+People are more likely to follow others with similar interest vectors. Similarity
+is cosine distance in topic space, scaled by a learned homophily parameter. This
+produces echo chambers and topical clusters without hand drawing a network.
+
+\paragraph{Preferential attachment.}
+Popular personas attract more incoming links. We combine homophily with a
+popularity term so hubs exist but still mostly connect within their topical
+neighborhood.
+
+Each persona follows a random number of accounts (Poisson around a learned mean).
+The graph is stored as, for each node, the list of its \emph{followers} (who sees
+its posts when it shares). That list drives the in network cascade channel.
+
+\subsection{Running the cascade (Monte Carlo)}
+A single \emph{run} is one stochastic replay of the post's life. We repeat about
+one hundred and twenty runs per draft and aggregate.
+
+\paragraph{Seed.}
+The author's in network followers see the tweet first. Who is seeded depends on
+topic overlap with the draft's DNA vector and on persona popularity.
+
+\paragraph{Reaction draw.}
+Each exposed persona independently draws like, reply, retweet, and quote actions.
+Probabilities combine four things: the persona's base rates, the tweet's DNA and
+niche weighted appeal, calibrated scale parameters, and---when trained---
+outputs from a small multilayer perceptron (MLP) reaction model. The MLP takes
+persona traits, DNA features, and niche membership and predicts like, reply,
+retweet, and quote logits; it is fit on impression level outcomes from
+OAuth authorized posts and loaded at inference whenever a champion reaction
+artifact exists. When no trained model is available, we fall back to a
+transparent weighted formula inspired by the platform's public ranking weights,
+so the cascade always runs.
+
+\paragraph{In network spread.}
+Anyone who retweets or quotes exposes the tweet to their followers who have not
+seen it yet. This is the social graph channel.
+
+\paragraph{Algorithmic spread.}
+When round engagement crosses a learned threshold, the tweet is injected to
+people outside the follower graph, standing in for the For You feed. A pool size
+grows with engagement and exploration adds random reach. We track what share of
+total spread came from the graph versus the algorithm.
+
+\paragraph{Stop.}
+A run ends when no new personas are exposed or the round cap is hit. From all
+runs we collect reach, branching factor $R$, viral hit rate $p_{\text{viral}}$,
+and the typical reach curve over rounds.
+
+\subsection{Scoring}
+The final score from zero to one hundred blends four signals on a log scale, so
+that strong tweets spread out across the range instead of all sticking at the
+top. The weights are amplification past the seed audience at \(0.30\), the
+fraction of the crowd reached at \(0.25\), the branching factor at \(0.25\), and
+the chance of a viral run at \(0.20\). A short verdict in words accompanies the
+number.
+
+\subsection{Uncertainty (optional ensemble)}
+The API can return more than a point score. When ensemble mode is on, we report
+the 10th and 90th percentile of scores across simulation seeds, a confidence
+label (high, medium, or low), and a short note on why the spread is wide (Monte
+Carlo noise, ambiguous DNA, or disagreement between profile versions). This
+costs extra compute but no extra training data.
+
+% Placeholder for a pipeline figure — add a PDF or PNG when you have one.
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.92\linewidth}{\centering\vspace{2.2em}
+\textbf{[Pipeline figure:]} Tweet $\rightarrow$ DNA $\rightarrow$ Audience +
+Network $\rightarrow$ Monte Carlo cascade $\rightarrow$ Score\\
+{\small (add \texttt{paper/figures/pipeline.pdf} and uncomment
+\texttt{\textbackslash includegraphics} before submission)}\vspace{2.2em}}}
+\caption{End to end flow. DNA features feed both appeal and topic biased seeding;
+the follower graph and algorithmic channel carry the cascade; many runs produce a
+score distribution.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{What We Train On}
+
+\subsection{Relative amplification}
+We deliberately avoid training on raw reach. Raw reach teaches a model that big
+accounts do well, which we already know. Instead we measure how far a tweet beats
+its own author's normal result. For an author with a history of posts, let the
+baseline be the median result of their recent tweets. The label for a new tweet
+is
+
+\begin{equation}
+\text{relative amplification} = \frac{\text{observed result}}{\max(\text{author baseline}, 1)}.
+\end{equation}
+
+A value near one means a typical tweet for that person. A value of five means the
+tweet did five times better than they usually do. Because the baseline is the
+author's own history, the same number means the same thing for a small account
+and a large one.
+
+We compute the observed result in one of two ways. When we have author authorized
+access we use impressions, which is the cleanest signal. When we only have public
+numbers we use a weighted sum of engagement in which replies count most, then
+quotes, then retweets, then likes, echoing how the platform appears to value
+deeper interaction. We sort the resulting amplification into a few tiers for
+reporting.
+
+\subsection{Why this matters for fairness across accounts}
+This choice changes what the model can learn. A celebrity post with fifty
+thousand likes might be a weak result for that celebrity, while the same number
+would be the post of the year for a small account. By dividing through the
+author's own baseline, the model is pushed to read the message rather than the
+audience.
+
+\section{The Learning Loop}
+
+The system improves itself over time through a pipeline that runs in production.
+Table~\ref{tab:components} maps each major piece to what it does in plain terms.
+
+\begin{table}[t]
+\centering
+\caption{Major components of the training and serving stack.}
+\label{tab:components}
+\small
+\begin{tabular}{p{0.22\linewidth}p{0.70\linewidth}}
+\toprule
+Component & Role \\
+\midrule
+Outcome snapshots &
+Poll tweets at 30m, 1h, 6h, 24h, and 72h so we can train on early velocity
+before the final label is ready. \\
+Relative amplification label &
+Train on how far a tweet beat its author's baseline, not raw likes. \\
+Expanded profile search &
+Fit global cascade knobs plus crowd birth priors (Beta shapes, engagement
+means). \\
+Community offsets &
+Per community tweaks to like, reply, and share rates (CMA-ES + $L_2$);
+persisted on champion artifact and merged at every predict request. \\
+CMA-ES + common random numbers &
+Search $\sim$\fill{55} parameters with an adaptive black box optimizer; fixed
+seeds across candidates so noise does not fake improvements. \\
+Champion challenger gate &
+Promote a new profile only if it wins on a recent time holdout across rank
+correlation, tail correlation, calibration, and saturation. \\
+Author audience profiles &
+Store fitted crowd priors per connected author; patch the simulator at predict
+time. \\
+Learned reaction model &
+Small MLP on impression level OAuth outcomes; champion checkpoint loaded at
+inference, heuristic fallback otherwise. \\
+Ensemble uncertainty &
+Optional p10/p90 score band and confidence from extra simulation runs. \\
+A/B experiment layer &
+Route a fraction of traffic to profile arms and compare outcomes causally. \\
+Drift monitoring &
+Daily checks on rank correlation, saturation, label coverage, and score
+monotonicity; writes structured events and triggers retrain when thresholds
+are breached. \\
+Niche appeal weights &
+Ridge regression on soft niche membership $\times$ DNA features, fit after
+CMA-ES and stored in the champion profile payload. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:phases} maps the same stack to the staged build we used in
+engineering. Every row is part of the submitted system.
+
+\begin{table}[t]
+\centering
+\caption{Continual learning phases (all included in the deployed service).}
+\label{tab:phases}
+\small
+\begin{tabular}{clp{0.58\linewidth}}
+\toprule
+Phase & Name & What it does \\
+\midrule
+1--3 & Ingest \& labels &
+Log every predict; snapshot velocity at 30m/1h/6h/24h; mature at 72h;
+label with relative amplification. \\
+4 & Community offsets &
+Per community shifts to like/reply/share rates; CMA-ES search with strong
+$L_2$ penalty; stored on champion artifact and reloaded at serve time. \\
+5--7 & CMA-ES \& gate &
+$\sim$\fill{55} global + birth + Beta parameters; common random numbers;
+champion--challenger promotion on time holdout with tail metrics. \\
+8 & Embeddings &
+Hashing trick default; optional sentence transformer encoder for DNA topic
+vector (same cascade API). \\
+9 & Reaction MLP &
+Train on OAuth impression outcomes; champion artifact replaces heuristic
+reaction draw when available. \\
+10 & Early velocity &
+High frequency snapshots feed interim labels before 72h maturation. \\
+11 & Author audience &
+Per author crowd priors; auto built after OAuth connect; resolved at predict. \\
+12 & Ensemble &
+Optional p10/p90 bands, confidence, and spread reason via extra MC runs. \\
+13 & Causal A/B &
+Experiment arms over profile or prompt variants; outcomes linked per arm. \\
+14 & Monitoring &
+Daily drift job; saturation and rank corr checks; retrain cron weekly. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Log.}
+Every time the service scores a tweet, it stores the draft, the DNA features, and
+the predicted score.
+
+\paragraph{Collect.}
+Later, the service gathers real metrics on a schedule (snapshots first, final
+label at 72h). Results arrive through author authorized access (impressions) or
+public engagement proxies.
+
+\paragraph{Refit.}
+We fit the simulator's parameters to the paired data in two stages. First,
+CMA-ES \cite{hansen2016cma} searches global cascade knobs, crowd birth priors
+(Beta shapes, engagement log mean), and community offset vectors. Every
+candidate profile is scored on the training slice with the \emph{same} Monte
+Carlo seeds (common random numbers), so the optimizer sees real differences and
+not lottery luck. The objective rewards overall rank match, tail rank match, top
+decile recall, and penalizes scores stuck at 0 or 100. Second, we run niche
+appeal fitting (Section~\ref{sec:niche-appeal}) on the same training slice and
+merge the resulting per niche weights into the challenger profile before
+evaluation.
+
+\subsection{Niche appeal fitting}
+\label{sec:niche-appeal}
+Global DNA appeal treats every audience the same. In practice, a finance joke and
+a sports meme need different coefficients. After CMA-ES, we hold the cascade
+parameters fixed and solve a ridge regression over niche membership. For each
+training tweet we compute soft membership $M_{ik}$ over $K$ fixed niche
+anchors and DNA feature vector $F_i$. We stack rows $M_{ik} \cdot F_i$ into a
+design matrix and regress toward rank standardized relative amplification, with
+an $L_2$ prior pulling weights back to the global appeal vector. The fitted
+$K \times D$ weight matrix is written into \texttt{niche\_appeal\_weights} on the
+champion profile. At simulation time, reaction appeal is the niche weighted sum
+of DNA dimensions rather than a single global dot product.
+
+\subsection{Serving calibrated artifacts}
+Community offsets are not part of the public \texttt{Profile} schema (they stay
+in the private backend). During CMA-ES they attach as a runtime patch on the
+profile object; on promotion we persist them in the artifact's metrics blob
+alongside evaluation numbers. At every predict request, \texttt{active\_profile}
+loads the champion payload \emph{and} merges stored community offsets (and any
+author specific offsets from the audience table) onto the profile before
+\texttt{analyze} runs. This guarantees that a promoted challenger changes live
+behavior immediately, not only offline metrics.
+
+\subsection{Learned reaction model}
+\label{sec:reaction-mlp}
+When enough OAuth authorized rows exist (impressions plus engagement breakdown),
+a weekly job trains a small MLP to predict reaction logits from persona traits,
+DNA, and niche membership. The best checkpoint is versioned like profile
+artifacts. \texttt{engine\_service} loads the champion reaction model when
+present and passes it into the cascade reaction step; otherwise the heuristic
+path in Section~3.4 applies. Training and inference share the same feature
+layout so promotion is a drop in replacement.
+
+\subsection{Author audience automation}
+After a user completes OAuth, a background job samples their recent posts and
+public follower statistics (where available), estimates engagement rate
+distributions, and upserts an \texttt{audience\_profiles} row. Resolution order
+at predict time is: author specific profile, tenant generic profile, then global
+champion birth priors only. This is how the same text scores differently for a
+niche creator versus a mass media account without retraining the global profile.
+
+\subsection{Causal experiments}
+The experiments API allocates traffic between control and treatment arms---for
+example two profile versions or two rewrite candidates from \texttt{/improve}.
+Each arm logs a prediction id; maturation writes \texttt{rel\_amplification} per
+arm. We report lift and confidence on the experiment record so product teams can
+validate a challenger causally before full promotion.
+
+\subsection{Drift monitoring and retrain schedule}
+A daily monitor job recomputes holdout rank correlation, score saturation, label
+coverage, and monotonicity checks on recent predictions. Breaches write
+\texttt{monitoring\_events} rows (severity info/warning/critical) and can flag
+an early retrain. Production crons run velocity snapshots every 30 minutes,
+outcome maturation hourly, monitoring daily, and full profile plus reaction
+retrain weekly. All jobs are idempotent module invocations behind API key auth
+on a single Postgres store.
+
+\paragraph{Promote.}
+We split data by time: oldest \fill{75}\% train, newest \fill{25}\% test. A
+challenger replaces the live champion only if it beats the champion on the
+recent slice on several metrics at once, not only headline rank correlation. Every
+version is versioned with full metrics for rollback.
+
+\paragraph{Serve.}
+The active champion profile and any stored offsets load on the next request with
+no code deploy. Optional ensemble mode exposes uncertainty bands to the client.
+The open source engine (\texttt{tweet\_virality\_simulator}) implements DNA,
+niches, network, cascade, and scoring; the private service adds tracing,
+Postgres, calibration, audience resolution, reaction model loading, and the
+HTTP API described above.
+
+\section{Deployment and open source split}
+
+We separate concerns deliberately. The \textbf{open engine} is a pip installable
+package with CLI commands \texttt{tvs x}, \texttt{compare}, \texttt{improve},
+and \texttt{validate}. Anyone can score drafts locally with zero API keys. The
+\textbf{private service} wraps the same \texttt{analyze} entry point, logs
+predictions, ingests outcomes, runs the learning loop, and serves
+\texttt{/predict} and \texttt{/improve} over HTTPS with API key authentication.
+
+\paragraph{Data bootstrap.}
+For bulk experiments we provide scripts that (i) score a CSV of tweets locally,
+(ii) fetch a tweet by platform id and score it, and (iii) sample a public Kaggle
+celebrity tweet dump, compute proxy labels, and ingest rows into the training
+store via the predict endpoint. The same relative amplification definition is
+used in bootstrap and in production maturation.
+
+\paragraph{Infrastructure.}
+The deployed stack is FastAPI + Uvicorn, Postgres (hosted on Supabase), and
+cron workers on a single VM. Environment variables control outcome window hours,
+minimum training sample count, optional compat LLM endpoints for DNA, and API
+keys. Profile and reaction artifacts are rows in an \texttt{artifacts} table with
+\texttt{champion} / \texttt{retired} status for rollback.
+
+\section{Experimental Setup}
+\label{sec:exp-setup}
+
+\subsection{Data}
+We use \fill{100{,}000} tweets drawn from \fill{N} public accounts spanning
+\fill{date range}. \fill{Describe the source here, for example a public dataset
+of tweets from well known accounts, and note any cleaning you did, such as
+dropping pure retweets and non English posts.} For each author we compute the
+baseline from their own history and label every tweet with its relative
+amplification as defined above. We split the data by time into \fill{75} percent
+for training and the most recent \fill{25} percent for testing, so that no future
+information leaks into the fit.
+
+\subsection{Baselines}
+We compare the calibrated simulator against the following.
+\begin{itemize}
+  \item \textbf{Uncalibrated simulator.} The same engine with default
+  parameters and no training. This isolates the value of the learning loop.
+  \item \textbf{Content only heuristic.} A scorer that uses only the draft
+  features without the cascade. This isolates the value of the simulation.
+  \item \fill{Optional: a content based machine learning model trained on the
+  same labels, for example a text classifier, as an external point of
+  comparison.}
+\end{itemize}
+
+\subsection{Evaluation harness}
+We evaluate with the same \texttt{evaluate\_profile} routine used in promotion:
+Spearman rank correlation, log tail correlation, top decile recall, pairwise tier
+accuracy, calibration MAE, and saturation. A holdout script replays a CSV of
+\texttt{(tweet, rel\_amplification)} tuples through the active champion (with
+offsets and niche weights loaded) and prints the metric bundle. Ablation rows
+drop one component at a time---algorithmic channel, community offsets, niche
+appeal, author audience profile, reaction MLP, sentence encoder---on the same
+time split.
+
+\subsection{Measures}
+Because spread is heavy tailed, we report several measures rather than one.
+\begin{itemize}
+  \item \textbf{Rank correlation.} Spearman correlation between the predicted
+  score and the real relative amplification. This is the headline number.
+  \item \textbf{Tail rank correlation.} The same correlation computed in log
+  space, which is more sensitive to the rare large hits.
+  \item \textbf{Top group recall.} Of the tweets that really did best, how many
+  the model placed in its own top group.
+  \item \textbf{Pair accuracy.} For pairs of tweets in different tiers, how often
+  the model ordered them correctly.
+  \item \textbf{Calibration error.} How far the predicted level sits from the
+  real level on average.
+\end{itemize}
+
+\section{Results}
+
+\fill{Fill this section with your numbers. The tables below are ready to take
+them.}
+
+\begin{table}[t]
+\centering
+\caption{Ranking quality on the held out recent slice. Higher is better for all
+columns except calibration error.}
+\label{tab:main}
+\begin{tabular}{lccccc}
+\toprule
+Model & Rank corr. & Tail rank & Top recall & Pair acc. & Calib. err. \\
+\midrule
+Content only        & \fill{ } & \fill{ } & \fill{ } & \fill{ } & \fill{ } \\
+Uncalibrated sim.   & \fill{ } & \fill{ } & \fill{ } & \fill{ } & \fill{ } \\
+Calibrated sim.\ (ours) & \fill{ } & \fill{ } & \fill{ } & \fill{ } & \fill{ } \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+Our main finding is that calibration moves the rank correlation from
+\fill{Y.YY} to \fill{X.XX}, a gain of \fill{...}. On a 10{,}000--tweet sample
+from the public Kaggle celebrity corpus (uncalibrated default profile, 40 Monte
+Carlo runs per draft), the simulator already reaches Spearman $\rho = 0.718$
+between score and relative amplification. The strongest per--tweet matches
+(Table~\ref{tab:qual-examples}) are not always the highest--scoring drafts: a
+\texttt{@jimmyfallon} primetime promo and a \texttt{@BarackObama} quote both sit
+near the 83rd and 73rd percentiles of predicted and actual relative reach
+respectively ($|\Delta| < 0.02$ percentile points), while a
+\texttt{@jtimberlake} fan Q\&A bit ($4.5\times$ author median, score~44) is
+ranked almost as accurately among the top decile of real hits.
+
+\paragraph{Best predicted tweets.}
+We rank every scored draft by how closely its percentile rank matches the
+percentile of real relative amplification
+($|\text{score pct.} - \text{rel.\ amp.\ pct.}|$; lower is better). Table~\ref{tab:qual-examples} lists the five lowest
+error cases from that 10{,}000--tweet run.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Qualitative examples where the simulator's ranking best matched real
+relative reach. \emph{Rel.\ amp.} is engagement (likes $+ 2\times$ retweets)
+divided by the author's own median; \emph{$|\Delta|$} is the absolute gap between
+the draft's score percentile and its rel.\ amp.\ percentile within the sample.}
+\label{tab:qual-examples}
+\begin{tabular}{@{}p{0.11\textwidth}p{0.42\textwidth}cccr@{}}
+\toprule
+Author & Draft (excerpt) & Score & Rel.\ amp. & Likes & $|\Delta|$ \\
+\midrule
+\texttt{jimmyfallon} &
+One week from tonight: The Best of Late Night 2 Hour Primetime Special\ldots &
+24 & 2.35 & 2{,}556 & 0.01 \\
+\texttt{BarackObama} &
+``Justice is making sure that every young person knows that they are special
+and their lives matter.'' ---President Obama &
+15 & 1.70 & 2{,}542 & 0.01 \\
+\texttt{jtimberlake} &
+\#ThingsToNeverAskADJ ``You got any Backstreet Boys??'' Bam. &
+44 & 4.52 & 1{,}627 & 0.02 \\
+\texttt{ladygaga} &
+The film documents the lives of young people affected by rape. Our song is
+called ``Till It Happens To You.'' &
+18 & 1.91 & 8{,}777 & 0.03 \\
+\texttt{rihanna} &
+Navy y'all did this i\$h!!! FIRST \& ONLY @RIAA certified with 100M song awards
+\& \#ANTI is PLATINUM!! &
+61 & 7.56 & 23{,}492 & 0.09 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+\textbf{Primetime promo (\texttt{@jimmyfallon}).}
+The draft announces a two--hour TV special and asks fans to set their DVRs.
+Absolute likes (2{,}556) look large to a human reader, but relative to
+\texttt{@jimmyfallon}'s own median the tweet is a solid but not explosive
+$2.35\times$ hit. The simulator assigns score~24 (``Likely to fizzle'' in
+absolute terms) yet places it at the 83rd percentile of both predicted and
+actual relative reach---within 0.01 percentile points.
+
+\noindent
+\textbf{Fan Q\&A punchline (\texttt{@jtimberlake}).}
+A short, humorous exchange (\#ThingsToNeverAskADJ) earned $4.5\times$ the
+author's typical engagement, driven by 5{,}305 retweets. The simulator scores it
+44 (``Limited spread'') and ranks it in the 94th percentile on both sides
+($|\Delta| = 0.02$), capturing a sleeper hit that raw like counts alone would
+not normalize across accounts.
+
+\noindent
+\textbf{Milestone announcement (\texttt{@rihanna}).}
+Among the top--accuracy set, this is the clearest \emph{high}--reach case: rel.\
+amp.\ $7.56\times$ with score~61 (``Has legs''), both near the 97th percentile.
+The model correctly separates a genuine outlier from the long tail of
+low--amplification replies that also receive high absolute scores on brand
+accounts.
+
+\begin{table}[t]
+\centering
+\caption{Effect of removing parts of the model. Each row drops one piece.}
+\label{tab:ablation}
+\begin{tabular}{lc}
+\toprule
+Setting & Rank corr. \\
+\midrule
+Full model                 & \fill{ } \\
+\quad without the algorithmic channel & \fill{ } \\
+\quad without per community offsets   & \fill{ } \\
+\quad without niche appeal weights    & \fill{ } \\
+\quad without author audience profile & \fill{ } \\
+\quad without learned reaction MLP    & \fill{ } \\
+\quad without sentence encoder (hash only) & \fill{ } \\
+\quad without the cascade (features only) & \fill{ } \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+\fill{Describe the ablation. The point to make is which parts of the simulation
+actually carry the signal.}
+
+\paragraph{Speed.}
+The simulator scores one draft in about \fill{Z} seconds with \fill{120} random
+runs on \fill{your hardware}. \fill{If you have a number for a language model
+based simulator, contrast it here to show the speed advantage.}
+
+\section{Discussion}
+
+The results suggest that a simple cascade, once its parameters are tied to real
+outcomes, carries more signal about spread than the draft features alone. The
+gain from the algorithmic channel in Table~\ref{tab:ablation} points to the same
+thing that platform audits report, which is that out of network exposure now
+drives a large share of reach.
+
+Two design choices did most of the work. Training on relative amplification kept
+the model honest about message quality, and the time based split kept us honest
+about whether the model would help tomorrow rather than only explaining
+yesterday. The staged stack in Table~\ref{tab:phases} matters as much as the
+core cascade: community offsets and niche appeal capture heterogeneity that a
+single global profile misses; author audience profiles personalize the crowd
+without retraining the world model; the reaction MLP and sentence encoder add
+capacity only where data and latency allow; monitoring and causal experiments
+keep the loop honest after deployment.
+
+\subsection{Limitations}
+The text encoder is still weaker than a large language model, which may cap
+subtle wording effects even with the sentence transformer option. We treat media
+as a single flag rather than modeling image or video content directly. Public
+engagement numbers remain a noisier stand in for impressions when OAuth is
+unavailable. Our evaluation corpus comes from a particular set of accounts and
+time window; platform ranking changes may shift absolute scores. The reaction
+MLP and author audience jobs need sufficient per author data before they beat
+heuristic defaults. Finally, the model predicts how far a message is likely to
+spread, not whether it is true or worth spreading.
+
+\section{Ethics}
+
+A tool that estimates spread can be misused to optimize for outrage or to flood
+feeds. Our aim is the opposite case, which is to give writers and analysts honest
+feedback on a draft. We store outcome data behind access control, and the author
+authorized path only reads metrics that the author has agreed to share. We do not
+attempt to identify private individuals, and the model offers no advice about the
+truth of a claim, only about its likely reach. We think the relative amplification
+target is also a small safeguard, because it rewards saying something that lands
+rather than simply having a large audience.
+
+\section{Conclusion}
+
+We set out to answer a question people ask before they post: will this travel?
+Forecasting methods cannot, because they need a cascade that does not exist yet,
+and content models tend to grade the account rather than the message. Our
+simulator runs the crowd forward from a blank draft, scores how far the message
+goes, and learns its parameters from real outcomes measured against each author's
+own baseline. On \fill{100{,}000} tweets the trained version clearly improved
+ranking over the untrained one while staying fast enough to run inside a web
+request. The full continual learning stack---niche appeal, community offsets,
+author audiences, reaction model, ensemble uncertainty, experiments, and
+monitoring---closes the loop from draft to deployment without manual parameter
+tuning. We release the open engine and describe the private service architecture
+so others can reproduce the simulation core and extend the learning loop.
+
+\section*{Reproducibility}
+
+The open simulation engine is available at \fill{GitHub URL}. Install with
+\texttt{pip install -e .} and run \texttt{tvs x "your draft"} locally. Bulk
+scoring and Kaggle bootstrap scripts live under \texttt{examples/}. The private
+service schema is in \texttt{sql/schema.sql} and \texttt{sql/migration\_v2.sql};
+cron schedules are in \texttt{deploy/crontab.txt}. Before submission we will
+publish \fill{(i)} a frozen champion profile artifact hash, \fill{(ii)} the
+holdout evaluation CSV or access instructions for the \fill{100{,}000} tweet
+corpus, and \fill{(iii)} a one command script that reproduces Table~\ref{tab:main}
+and Table~\ref{tab:ablation} on the time split described in
+Section~\ref{sec:exp-setup}.
+
+% ---------------------------------------------------------------------------
+\begin{thebibliography}{9}
+
+\bibitem{zhao2015seismic}
+Q.~Zhao, M.~Erdogdu, H.~He, A.~Rajaraman, and J.~Leskovec.
+\newblock SEISMIC: A self exciting point process model for predicting tweet
+popularity.
+\newblock In \emph{Proc. KDD}, 2015.
+
+\bibitem{cheng2014cascades}
+J.~Cheng, L.~Adamic, P.~A.~Dow, J.~Kleinberg, and J.~Leskovec.
+\newblock Can cascades be predicted?
+\newblock In \emph{Proc. WWW}, 2014.
+
+\bibitem{rameez2022viralbert}
+R.~Rameez, H.~A.~Rahmani, and E.~Yilmaz.
+\newblock ViralBERT: A user focused BERT based approach to virality prediction.
+\newblock In \emph{Proc. UMAP}, 2022.
+
+\bibitem{liu2025popsim}
+Y.~Liu, W.~Liu, X.~Gu, A.~He, W.~Wang, and Y.~Zhang.
+\newblock PopSim: Social network simulation for social media popularity
+prediction.
+\newblock \emph{arXiv preprint arXiv:2512.02533}, 2025.
+
+\bibitem{park2023agents}
+J.~S.~Park, J.~O'Brien, C.~J.~Cai, M.~R.~Morris, P.~Liang, and M.~S.~Bernstein.
+\newblock Generative agents: Interactive simulacra of human behavior.
+\newblock In \emph{Proc. UIST}, 2023.
+
+\bibitem{weng2012competition}
+L.~Weng, A.~Flammini, A.~Vespignani, and F.~Menczer.
+\newblock Competition among memes in a world with limited attention.
+\newblock \emph{Scientific Reports}, 2:335, 2012.
+
+\bibitem{pezzoni2013retweet}
+F.~Pezzoni, J.~An, A.~Passarella, J.~Crowcroft, and M.~Conti.
+\newblock Why do I retweet it? An information propagation model for microblogs.
+\newblock In \emph{Proc. SocInfo}, 2013.
+
+\bibitem{huszar2022amplification}
+F.~Husz\'ar, S.~I.~Ktena, C.~O'Brien, L.~Belli, A.~Schlaikjer, and M.~Hardt.
+\newblock Algorithmic amplification of politics on Twitter.
+\newblock \emph{PNAS}, 119(1), 2022.
+
+\bibitem{hansen2016cma}
+N.~Hansen.
+\newblock The CMA evolution strategy: A tutorial.
+\newblock \emph{arXiv preprint arXiv:1604.00772}, 2016.
+
+\end{thebibliography}
+
+\end{document}

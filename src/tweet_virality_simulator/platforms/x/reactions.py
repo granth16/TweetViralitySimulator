@@ -14,17 +14,16 @@ from typing import Dict
 
 import numpy as np
 
-from ...models import TweetDNA
+from ...models import SEMANTIC_DIMS, TweetDNA
 from ...profile import Profile
 from ...population.audience import Audience
+from ...population.niches import niche_membership
 
 
-def content_appeal(dna: TweetDNA, profile: Profile) -> float:
-    """Overall 0..1 appeal of the content, before persona/affinity effects."""
-    link_penalty = profile.link_penalty if dna.has_link else 0.0  # X downranks links
-    media_boost = profile.media_boost if dna.has_media else 0.0
+def _global_appeal_base(dna: TweetDNA, profile: Profile) -> float:
+    """The original niche-blind DNA->appeal sum (generic prior)."""
     w = profile.appeal_weights
-    base = (
+    return (
         w.get("hook_strength", 0.0) * dna.hook_strength
         + w.get("emotional_intensity", 0.0) * dna.emotional_intensity
         + w.get("novelty", 0.0) * dna.novelty
@@ -32,6 +31,39 @@ def content_appeal(dna: TweetDNA, profile: Profile) -> float:
         + w.get("relatability", 0.0) * dna.relatability
         + w.get("clarity", 0.0) * dna.clarity
     )
+
+
+def _niche_appeal_base(dna: TweetDNA, profile: Profile, weight_matrix) -> float:
+    """Membership-weighted DNA->appeal sum across niches.
+
+    ``base = sum_k membership_k * (sum_d W[k,d] * dna_d)``, i.e. the tweet's
+    appeal is computed under each niche's own weights and blended by how much the
+    tweet belongs to that niche. Reduces to a single niche's weights when the
+    membership concentrates on one anchor.
+    """
+    feats = np.array([getattr(dna, d, 0.0) for d in SEMANTIC_DIMS], dtype=np.float64)
+    W = np.asarray(weight_matrix, dtype=np.float64)          # (niche_count, dims)
+    member = niche_membership(dna.topic_vector, profile)     # (niche_count,)
+    per_niche_base = W @ feats                               # (niche_count,)
+    return float(member @ per_niche_base)
+
+
+def content_appeal(dna: TweetDNA, profile: Profile) -> float:
+    """Overall 0..1 appeal of the content, before persona/affinity effects.
+
+    Uses per-niche weights when the profile carries them (fitted on outcomes),
+    otherwise the global ``appeal_weights`` prior. Link/media adjustments and the
+    global ``appeal_scale`` apply identically in both paths.
+    """
+    link_penalty = profile.link_penalty if dna.has_link else 0.0  # X downranks links
+    media_boost = profile.media_boost if dna.has_media else 0.0
+
+    weight_matrix = profile.appeal_weight_matrix(SEMANTIC_DIMS)
+    if weight_matrix is None:
+        base = _global_appeal_base(dna, profile)
+    else:
+        base = _niche_appeal_base(dna, profile, weight_matrix)
+
     return float(np.clip(base * profile.appeal_scale + media_boost - link_penalty, 0.02, 1.0))
 
 

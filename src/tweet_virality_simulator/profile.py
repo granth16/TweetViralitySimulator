@@ -54,6 +54,34 @@ class Profile(BaseModel):
     link_penalty: float = 0.30
     media_boost: float = 0.08
 
+    # --- niche-conditional appeal (learned, optional) ---
+    # A tweet's DNA->appeal mapping is not the same in every community: novelty
+    # carries tech, emotion carries sports, clarity carries how-to. ``niche_*``
+    # lets the backend fit one weight vector per niche directly from outcomes
+    # (see learning/appeal_fit). When ``niche_appeal_weights`` is None the engine
+    # falls back to the single global ``appeal_weights`` for every niche, so an
+    # un-fitted profile behaves exactly as before.
+    niche_count: int = 8
+    niche_temperature: float = 6.0
+    # Optional: one {dim: weight} mapping per niche, length == niche_count.
+    niche_appeal_weights: Optional[List[Dict[str, float]]] = None
+
+    def appeal_weight_matrix(self, dims: List[str]) -> Optional[List[List[float]]]:
+        """Per-niche weights as a ``(niche_count, len(dims))`` row list.
+
+        Returns None when no niche weights are fitted (caller uses the global
+        ``appeal_weights`` path). Rows are padded/truncated to ``niche_count`` and
+        missing dims default to 0.0, so a partially-specified artifact is safe.
+        """
+        rows = self.niche_appeal_weights
+        if not rows:
+            return None
+        out: List[List[float]] = []
+        for k in range(self.niche_count):
+            row = rows[k] if k < len(rows) else {}
+            out.append([float(row.get(d, 0.0)) for d in dims])
+        return out
+
     # --- reaction propensity scales ---
     like_scale: float = 6.56
     retweet_scale: float = 8.16
